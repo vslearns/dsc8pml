@@ -1,0 +1,164 @@
+---
+title: How Well Do You Exercise?
+author: Vanshaj S.
+output: 
+  prettydoc::html_pretty:
+    theme: hpstr
+    highlight: github
+---
+
+```{r, echo=F, results='hide'}
+knitr::opts_chunk$set(warning = F, message = F, error = F)
+```
+
+
+## Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Setup
+
+### Loading Libraries
+As always, let's begin by loading some useful libraries.
+
+```{r, results='hide'}
+library(caret)
+
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+### Getting and Preprocessing Data
+Let's download the data and save it into a `data` directory for ease of access. Then, we'll go ahead and load both the train and test datasets, marking the `na` strings appropriately.
+
+```{r}
+if (!file.exists("data")) dir.create("data")
+if (!file.exists("data/train.csv")) download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "data/train.csv")
+if (!file.exists("data/test.csv")) download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "data/test.csv")
+
+train <- read.csv("data/train.csv", na.strings = c("NA", ""))
+test <- read.csv("data/test.csv", na.strings = c("NA", ""))
+```
+
+Let's go ahead and ignore all columns with **any** `na` values (we're particularly strict around here). We'll also ignore the first seven columns, as they're more for organization than prediction.
+
+```{r}
+complete <- colSums(is.na(train)) + colSums(is.na(test)) == 0
+
+train <- train[, colSums(is.na(train)) == 0]
+test <- test[, colSums(is.na(test)) == 0]
+
+train <- train[, -c(1:7)]
+test <- test[, -c(1:7)]
+```
+
+Let's address reproducibility and split our train set into a `train` and `valid` set for checking, since the test set doesn't contain a `classe` column for cross-validation.
+
+```{r}
+set.seed(82736)
+valid.range <- createDataPartition(train$classe, p = 0.3, list = F)
+
+valid <- train[valid.range,]
+train <- train[-valid.range,]
+```
+
+The tests we're going to perform today include linear discriminant analysis, classification trees, and random forest.
+
+## Modeling
+
+### LDA
+Let's create an LDA model.
+
+```{r}
+mod.lda <- train(classe ~ ., data = train, method = "lda")
+```
+
+### ClassTree
+Let's create a classification trees model. The control here is to limit the k-folds to 5 instead of 10. This is for efficiency and cleanliness (the 10-fold plots are a little hard to read). We'll make an rpart just for fun.
+
+```{r}
+mod.ct.control <- trainControl(method = "cv", number = 5) ## overplotting
+mod.ct <- train(classe ~ ., data = train, method = "rpart",
+                trControl = mod.ct.control)
+rpart.plot(x = mod.ct$finalModel)
+```
+
+Just looking at that plot, we can imagine that such a simple model is likely inaccurate. But we'll see!
+
+### RF
+Let's create an RF model.
+
+```{r}
+mod.rf <- randomForest(classe ~ ., data = train)
+```
+
+## Validation
+
+### LDA
+Let's predict our validation set with the LDA model.
+
+```{r}
+val.lda <- predict(mod.lda, valid)
+```
+
+### ClassTree
+Let's predict our validation set with the classification trees model.
+
+```{r}
+val.ct <- predict(mod.ct, valid)
+```
+
+### RF
+Let's predict our validation set with the RF model.
+
+```{r}
+val.rf <- predict(mod.rf, valid)
+```
+
+## Accuracy Checks
+
+### LDA
+Let's analyze the accuracy of the LDA model.
+
+```{r}
+confusionMatrix(val.lda, valid$classe)$overall[1]
+```
+
+Almost 70%, not too bad. However, I personally like to set my threshold at 85. Let's see if the other models can beat this threshold.
+
+Out-of-sample error rate is a little over 30%.
+
+### ClassTree
+Let's analyze the accuracy of the classification trees model.
+
+```{r}
+confusionMatrix(val.ct, valid$classe)$overall[1]
+```
+
+This is even worse, probably because of the fact that we cut it to 5-folds.
+
+Out-of-sample error rate is a little over 50%.
+
+### RF
+Let's analyze the accuracy of the RF model.
+
+```{r}
+confusionMatrix(val.rf, valid$classe)$overall[1]
+```
+
+Beautiful. The random forests model subsets the listed predictors every time it splits, then breaking the correlations in its trees. This allows the now-independent predictors to be much better interpreted, which gives random forests its high accuracy. However, it's a little hard to interpret the resulting algorithm, and it's extremely inefficient to compute an RF model. The last bit here is true for GBM models too (at least in this case), so...
+
+Out-of-sample error rate is under 1%.
+
+## Test Data
+Our final task in this project is to apply our chosen model to the test set.
+
+```{r}
+test.rf <- predict(mod.rf, test)
+test.rf
+```
+
+We can't quite check this, as we're not granted access to the test case `classe`.
+
